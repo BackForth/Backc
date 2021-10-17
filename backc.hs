@@ -4,6 +4,7 @@ import System.Environment
 import Data.Maybe
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Char (isDigit)
+import Data.List (intercalate)
 import qualified Data.Map as Map
 
 backerror :: String -> IO ()
@@ -38,7 +39,7 @@ data Token = Token OpCode
 		| Word String
 		| Define
 		| WEnd
-		| BackError String
+		| BackParsingError String
 		deriving(Show)
 
 instance Eq Token where
@@ -83,24 +84,48 @@ backlex sourcecode = map tokenize $ words sourcecode
 backparse :: [Token] -> [Token] -> WordTable -> [Token]
 backparse [] acc _ = acc
 backparse (Word name:tks) acc table = case Map.lookup name table of
-										Nothing ->  [BackError "Tried to use word not in scope."]
+										Nothing ->  [BackParsingError "Tried to use word not in scope."]
 										Just bd -> backparse tks ((++) acc $ backparse bd [] table) $ table 
 backparse (Define:tks) acc table = collect tks [] where
 	collect :: [Token] -> [Token] -> [Token]
 	collect [] bd = bd
-	collect (WEnd:tokens) [] = [BackError "Empty Word Defintion."]
+	collect (WEnd:tokens) [] = [BackParsingError "Empty Word Defintion."]
 	collect (tok:tokens) [] = collect tokens [tok]
 	collect (WEnd:tokens) (Word nm:body) = backparse tokens acc $ Map.insert nm body table
-	collect (WEnd:tokens) (hd:body) = [BackError "Word Definition doesn't start with a valid Word."]
+	collect (WEnd:tokens) (hd:body) = [BackParsingError "Word Definition doesn't start with a valid Word."]
 	collect (tok:tokens) body = collect tokens (body++[tok])
 backparse (FNum n:tks) acc table = backparse tks (acc++[Token Push, FNum n]) table
 backparse (tk:tks) acc table = backparse tks (acc++[tk]) table
 
+bkparse :: [Token] -> [Token]
 bkparse toks = backparse toks [] Map.empty
+
+backemit :: [Token] -> [Int] -> Either String [Int]
+backemit [] acc = Right acc
+backemit (FNum n:toks) acc = case backemit toks (acc++[n]) of
+	Left er -> Left er
+	Right result -> Right result 
+backemit (Token op:toks) acc = case backemit toks (acc++[fromEnum op]) of
+	Left er -> Left er
+	Right result -> Right result
+backemit (BackParsingError err:toks) _ = Left err
+
+
+bkemit :: [Token] -> Either String [Int]
+bkemit toks = backemit toks []
+
+-- impure
+
+finish :: Either String [Int] -> IO ()
+finish out = do
+		case out of
+			Left err -> backerror err
+			Right res -> writeFile "out.bin" $ intercalate " " (map show res)
+		return ()
 
 main :: IO ()
 main = do
 	args <- getArgs
 	case listToMaybe args of
 		Nothing -> do backerror "Not Enough Arguments."
-		Just fname -> print . bkparse . backlex =<< readFile fname
+		Just fname -> finish . bkemit . bkparse . backlex =<< readFile fname
