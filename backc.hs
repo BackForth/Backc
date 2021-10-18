@@ -6,9 +6,6 @@ import Data.Char (isDigit)
 import Data.List (intercalate)
 import qualified Data.Map as Map
 
-backerror :: String -> IO ()
-backerror msg = hPutStrLn stderr msg >> exitWith (ExitFailure 1)
-
 data OpCode = Out
             | In
             | Emit
@@ -152,6 +149,9 @@ backformat (ByteCode cd:bc) acc = backformat bc (acc++[show cd])
 backformat (Header hd:bc) acc = backformat bc (acc++[hd])
 
 -- impure
+
+backerror :: String -> IO ()
+backerror msg = hPutStrLn stderr msg >> exitWith (ExitFailure 1)
 
 finish :: Either String [ByteCode] -> IO ()
 finish out = do
