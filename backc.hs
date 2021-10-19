@@ -127,12 +127,12 @@ backparse_glob [] acc _ = acc
 backparse_glob (StartComment:tks) acc table = untilcmt tks acc table backparse_glob
 backparse_glob (EndComment:tks) _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
 backparse_glob (Define:tks) acc table = collect tks [] acc table backparse_glob
-backparse_glob (Word name:StartThread:tks) acc table = collectT tks [] table name where
+backparse_glob (Word name:StartThread:tks) acc table = let localt = table in collectT tks [] localt name where
     collectT :: [Token]-> [Token] -> WordTable -> String -> [Token]
     collectT [] _ _ _ = [BackParsingError "Unclosed Square Bracket."]
     collectT (EndThread:tokens) [] _ _  = acc
     collectT (tok:tokens) [] tbl n = collectT tokens [tok] tbl n
-    collectT (EndThread:tokens) a tbl n = backparse_glob tokens ((++) acc $ (TName n):(backparse_code a [] tbl)) tbl
+    collectT (EndThread:tokens) a tbl n = backparse_glob tokens ((++) acc $ (TName n):(backparse_code a [] tbl)) table
     collectT (tok:tokens) a tbl n = collectT tokens (a++[tok]) tbl n
 backparse_glob (Word name:tks) _ _ = [BackParsingError "Encountred Thread Definition, but couldn't find '['."]
 backparse_glob (EndThread:tks) _ _ = [BackParsingError "Encountred Closing Square Bracket without a preceeding open one."]
