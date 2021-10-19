@@ -15,7 +15,7 @@ ghc backc.hs
 
 # Design Notes
 The whole Back Compiler, is consisted of special tailored fold-like functions, like `backlex` or `untilcmt` that return their accumulator once they have no more input.
-see the source code for a better idea for how it works
+see the source code for a better idea of how it works
 
 # License
 Backc is licensed under the `GPL-3.0` license
