@@ -153,7 +153,6 @@ backemit (Token op:toks) acc = case backemit toks (acc++[ByteCode $ fromEnum op]
     Right result -> Right result
 backemit (BackParsingError err:toks) _ = Left err
 
-
 bkemit :: [Token] -> Either String [ByteCode]
 bkemit toks = backemit toks []
 
