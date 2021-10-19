@@ -41,6 +41,7 @@ data Token = Token OpCode
         | EndComment
         | StartThread
         | EndThread
+        | NoVal
         | BackParsingError String
         deriving(Show)
 
@@ -48,41 +49,54 @@ data ByteCode = ByteCode Int | Header String deriving(Show)
 type WordBody = [Token]
 type WordTable = Map.Map String WordBody
 
-tokenize :: String -> Token
-tokenize "." = Token Out
-tokenize "," = Token In
-tokenize "emit" = Token Emit
-tokenize "+" = Token Plus
-tokenize "-" = Token Minus
-tokenize "*" = Token Multiply
-tokenize "/" = Token Divide
-tokenize "%" = Token Modulo
-tokenize ":" = Define
-tokenize ";" = WEnd
-tokenize "if" = Token If
-tokenize "then" = Token IfEnd
-tokenize "dup" = Token Dup
-tokenize "rot" = Token Rot
-tokenize "swap" = Token Swap
-tokenize "drop" = Token Drop
-tokenize "over" = Token Over
-tokenize "alloc" = Token Alloc
-tokenize "free" = Token Free
-tokenize "write" = Token Write
-tokenize "read" = Token Read
-tokenize "send" = Token Send
-tokenize "recv" = Token Recieve
-tokenize "exit" = Token Exit
-tokenize "(" = StartComment
-tokenize ")" = EndComment
-tokenize "[" = StartThread
-tokenize "]" = EndThread
-tokenize str
-    | all isDigit $ str = FNum (read str :: Int)
+recognize :: String -> Token
+recognize "" = NoVal
+recognize "emit" = Token Emit
+recognize "if" = Token If
+recognize "then" = Token IfEnd
+recognize "dup" = Token Dup
+recognize "rot" = Token Rot
+recognize "swap" = Token Swap
+recognize "drop" = Token Drop
+recognize "over" = Token Over
+recognize "alloc" = Token Alloc
+recognize "free" = Token Free
+recognize "write" = Token Write
+recognize "read" = Token Read
+recognize "send" = Token Send
+recognize "recv" = Token Recieve
+recognize"exit" = Token Exit
+recognize str
+    | all isDigit str = FNum (read str :: Int)
     | otherwise = Word str
 
-backlex :: String -> [Token] 
-backlex sourcecode = map tokenize $ words sourcecode
+backlex :: String -> String -> [Token] -> [Token]
+backlex [] _ acc = acc
+backlex ('.':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Out])
+backlex (',':input) wacc acc = backlex input [] (acc++[recognize wacc, Token In])
+backlex ('+':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Plus])
+backlex ('-':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Minus])
+backlex ('*':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Multiply])
+backlex ('/':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Divide])
+backlex ('%':input) wacc acc = backlex input [] (acc++[recognize wacc, Token Modulo])
+backlex (':':input) wacc acc = backlex input [] (acc++[recognize wacc, Define])
+backlex (';':input) wacc acc = backlex input [] (acc++[recognize wacc, WEnd])
+backlex ('(':input) wacc acc = backlex input [] (acc++[recognize wacc, StartComment])
+backlex (')':input) wacc acc = backlex input [] (acc++[recognize wacc, EndComment])
+backlex ('[':input) wacc acc = backlex input [] (acc++[recognize wacc, StartThread])
+backlex (']':input) wacc acc = backlex input [] (acc++[recognize wacc, EndThread])
+backlex (' ':input) wacc acc = backlex input [] (acc++[recognize wacc])
+backlex ('\n':input) wacc acc = backlex input [] (acc++[recognize wacc])
+backlex ('\t':input) wacc acc = backlex input [] (acc++[recognize wacc])
+backlex (c:input) wacc acc = backlex input (wacc++(c:[])) acc
+
+backstrip :: [Token] -> [Token] -> [Token]
+backstrip [] acc = acc
+backstrip (NoVal:tokens) acc = backstrip tokens acc
+backstrip (tok:tokens) acc = backstrip tokens (acc++[tok])
+
+bklex :: String -> [Token]
+bklex sourcode = backstrip (backlex sourcode [] []) []
 
 untilcmt :: [Token]-> [Token] -> WordTable -> ([Token] -> [Token] -> WordTable -> [Token]) -> [Token]
 untilcmt [] ac tbl f = [BackParsingError "Unclosed paranthesis."]
@@ -165,4 +179,4 @@ main = do
     args <- getArgs
     case listToMaybe args of
         Nothing -> do backerror "Not Enough Arguments."
-        Just fname -> finish . bkemit . bkparse . backlex =<< readFile fname
+        Just fname -> finish . bkemit . bkparse . bklex =<< readFile fname
