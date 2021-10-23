@@ -29,6 +29,7 @@ data OpCode = Out
             | Recieve
             | Exit
             | Push
+            | Address
             deriving(Enum, Show)
 
 data Token = Token OpCode
@@ -48,6 +49,29 @@ data Token = Token OpCode
 data ByteCode = ByteCode Int | Header String deriving(Show)
 type WordBody = [Token]
 type WordTable = Map.Map String WordBody
+
+hexChar :: Char -> Int
+hexChar '0' = 0
+hexChar '1' = 1
+hexChar '2' = 2
+hexChar '3' = 3
+hexChar '4' = 4
+hexChar '5' = 5
+hexChar '6' = 6
+hexChar '7' = 7
+hexChar '8' = 8
+hexChar '9' = 9
+hexChar 'A' = 10
+hexChar 'B' = 11
+hexChar 'C' = 12
+hexChar 'D' = 13
+hexChar 'E' = 14
+hexChar 'F' = 15
+hexChar ch = 0
+
+hexToDec :: String -> Int
+hexToDec [] = 0
+hexToDec hxStr = hexChar (last hxStr) + 16 * hexToDec (init hxStr)
 
 recognize :: String -> Token
 recognize "" = NoVal
@@ -115,6 +139,7 @@ backparse_code :: [Token] -> [Token] -> WordTable -> [Token]
 backparse_code [] acc _ = acc
 backparse_code (StartComment:tks) acc table = untilcmt tks acc table backparse_code
 backparse_code (EndComment:tks) _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
+backparse_code (Word ('$':name):tks) acc table = backparse_code tks (acc++[Word ('$':name)]) table
 backparse_code (Word name:tks) acc table = case Map.lookup name table of
                                         Nothing ->  [BackParsingError ("Tried to use word not in scope. '" ++ name ++ "'")]
                                         Just bd -> backparse_code tks ((++) acc $ backparse_code bd [] table) $ table 
@@ -136,6 +161,7 @@ backparse_glob (Word name:StartThread:tks) acc table = let localt = table in col
     collectT (tok:tokens) a tbl n = collectT tokens (a++[tok]) tbl n
 backparse_glob (Word name:tks) _ _ = [BackParsingError "Encountred Thread Definition, but couldn't find '['."]
 backparse_glob (EndThread:tks) _ _ = [BackParsingError "Encountred Closing Square Bracket without a preceeding open one."]
+backparse_glob (tk:tks) _ _  = [BackParsingError "Encountred Something which is neither a thread or name defintion."]
 
 bkparse :: [Token] -> [Token]
 bkparse toks = backparse_glob toks [] Map.empty
@@ -146,6 +172,9 @@ backemit (FNum n:toks) acc = case backemit toks (acc++[ByteCode n]) of
     Left er -> Left er
     Right result -> Right result
 backemit (TName nm:toks) acc = case backemit toks (acc++[Header nm]) of
+    Left er -> Left er
+    Right result -> Right result
+backemit (Word ('$':addr):toks) acc = let adr = hexToDec addr in case backemit toks (acc++[ByteCode 22, ByteCode adr]) of
     Left er -> Left er
     Right result -> Right result
 backemit (Token op:toks) acc = case backemit toks (acc++[ByteCode $ fromEnum op]) of
