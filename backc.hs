@@ -90,7 +90,7 @@ recognize "read" = Token Read
 recognize "send" = Token Send
 recognize "recv" = Token Recieve
 recognize "recv#" = Token RecieveN
-recognize"exit" = Token Exit
+recognize "exit" = Token Exit
 recognize str
     | all isDigit str = FNum (read str :: Int)
     | otherwise = Word str
