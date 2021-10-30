@@ -30,6 +30,8 @@ data OpCode = Out
             | Exit
             | Push
             | RecieveN
+            | Do
+            | Loop
             deriving(Enum, Show)
 
 data Token = Token OpCode
@@ -90,6 +92,8 @@ recognize "read" = Token Read
 recognize "send" = Token Send
 recognize "recv" = Token Recieve
 recognize "recv#" = Token RecieveN
+recognize "do" = Token Do
+recognize "loop" = Token Loop
 recognize "exit" = Token Exit
 recognize str
     | all isDigit str = FNum (read str :: Int)
