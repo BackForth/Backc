@@ -29,7 +29,7 @@ data OpCode = Out
             | Recieve
             | Exit
             | Push
-            | Address
+            | RecieveN
             deriving(Enum, Show)
 
 data Token = Token OpCode
@@ -89,6 +89,7 @@ recognize "write" = Token Write
 recognize "read" = Token Read
 recognize "send" = Token Send
 recognize "recv" = Token Recieve
+recognize "recv#" = Token RecieveN
 recognize"exit" = Token Exit
 recognize str
     | all isDigit str = FNum (read str :: Int)
