@@ -6,7 +6,8 @@ import Data.Char (isDigit)
 import Data.List (intercalate)
 import qualified Data.Map as Map
 
-data OpCode = Out
+data OpCode = Nop
+            | Out
             | In
             | Emit
             | Plus
@@ -27,11 +28,11 @@ data OpCode = Out
             | Read
             | Send
             | Recieve
-            | Exit
-            | Push
             | RecieveN
+            | Exit
             | Do
             | Loop
+            | Push
             deriving(Enum, Show)
 
 data Token = Token OpCode
@@ -47,6 +48,10 @@ data Token = Token OpCode
         | NoVal
         | BackParsingError String
         deriving(Show)
+
+instance Eq Token where
+    (==) (Word n) (Word m) = n == m
+    _ == _ = False -- note we return False because we really only need to check whether two words are equal or not
 
 data ByteCode = ByteCode Int | Header String deriving(Show)
 type WordBody = [Token]
@@ -127,6 +132,12 @@ backstrip (tok:tokens) acc = backstrip tokens (acc++[tok])
 bklex :: String -> [Token]
 bklex sourcode = backstrip (backlex sourcode [] []) []
 
+backelem :: (Eq a) => [a] -> a -> Maybe a
+backelem [] s = Nothing
+backelem (x:xs) s
+    | x == s = Just s
+    | otherwise = backelem xs s
+
 untilcmt :: [Token]-> [Token] -> WordTable -> ([Token] -> [Token] -> WordTable -> [Token]) -> [Token]
 untilcmt [] ac tbl f = [BackParsingError "Unclosed paranthesis."]
 untilcmt (EndComment:tokens) ac tbl f = f tokens ac tbl
@@ -136,7 +147,9 @@ collect :: [Token] -> [Token] -> [Token] -> WordTable -> ([Token] -> [Token] -> 
 collect [] bd _ _ _ = bd
 collect (WEnd:tokens) [] _ _ _ = [BackParsingError "Empty Word Defintion."]
 collect (tok:tokens) [] ac tbl f = collect tokens [tok] ac tbl f
-collect (WEnd:tokens) (Word nm:body) ac tbl f = f tokens ac $ Map.insert nm body tbl
+collect (WEnd:tokens) (Word nm:body) ac tbl f = case backelem body (Word nm) of
+    Nothing -> f tokens ac $ Map.insert nm body tbl
+    _ -> [BackParsingError "Encountred Recursive Word Definition."]
 collect (WEnd:tokens) (hd:body) _ _ _ = [BackParsingError "Word Definition doesn't start with a valid Word."]
 collect (tok:tokens) body ac tbl f = collect tokens (body++[tok]) ac tbl f
 
@@ -145,6 +158,8 @@ backparse_code [] acc _ = acc
 backparse_code (StartComment:tks) acc table = untilcmt tks acc table backparse_code
 backparse_code (EndComment:tks) _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
 backparse_code (Word ('$':name):tks) acc table = backparse_code tks (acc++[Word ('$':name)]) table
+backparse_code (Word ('~':name):tks) acc table = backparse_code tks (acc++[Word ('~':name)]) table
+backparse_code (Word ('@':name):tks) acc table = backparse_code tks (acc++[Word ('@':name)]) table
 backparse_code (Word name:tks) acc table = case Map.lookup name table of
                                         Nothing ->  [BackParsingError ("Tried to use word not in scope. '" ++ name ++ "'")]
                                         Just bd -> backparse_code tks ((++) acc $ backparse_code bd [] table) $ table 
@@ -171,24 +186,28 @@ backparse_glob (tk:tks) _ _  = [BackParsingError "Encountred Something which is 
 bkparse :: [Token] -> [Token]
 bkparse toks = backparse_glob toks [] Map.empty
 
-backemit :: [Token] -> [ByteCode] -> Either String [ByteCode]
-backemit [] acc = Right acc
-backemit (FNum n:toks) acc = case backemit toks (acc++[ByteCode n]) of
-    Left er -> Left er
-    Right result -> Right result
-backemit (TName nm:toks) acc = case backemit toks (acc++[Header nm]) of
-    Left er -> Left er
-    Right result -> Right result
-backemit (Word ('$':addr):toks) acc = let adr = hexToDec addr in case backemit toks (acc++[ByteCode 22, ByteCode adr]) of
-    Left er -> Left er
-    Right result -> Right result
-backemit (Token op:toks) acc = case backemit toks (acc++[ByteCode $ fromEnum op]) of
-    Left er -> Left er
-    Right result -> Right result
-backemit (BackParsingError err:toks) _ = Left err
+encode :: String -> String -> ByteCode
+encode [] acc = ByteCode (read acc :: Int)
+encode (x:xs) acc = encode xs (acc++(pad . show $ fromEnum x)) where
+    pad :: String -> String
+    pad (x:[]) = ['0', '0', x]
+    pad (x:n:[]) = ['0', x, n]
+    pad str = str
+
+backemit :: [Token] -> [ByteCode] -> [String] ->  Either String [ByteCode]
+backemit [] acc defv = Right acc
+backemit (FNum n:toks) acc defv = backemit toks (acc++[ByteCode n]) defv
+backemit (TName nm:toks) acc defv = backemit toks (acc++[Header nm]) defv
+backemit (Word ('$':addr):toks) acc defv = let adr = hexToDec addr in backemit toks (acc++[ByteCode 22, ByteCode adr]) defv
+backemit (Word ('~':name):toks) acc defv = backemit toks (acc++[ByteCode 27, encode name []]) (defv++[name])
+backemit (Word ('@':name):toks) acc defv = case backelem defv name of
+    Nothing -> Left "Tried to put word not defined before."
+    _ -> backemit toks (acc++[ByteCode 28, encode name []]) defv
+backemit (Token op:toks) acc defv = backemit toks (acc++[ByteCode $ fromEnum op]) defv
+backemit (BackParsingError err:toks) _ _ = Left err
 
 bkemit :: [Token] -> Either String [ByteCode]
-bkemit toks = backemit toks []
+bkemit toks = backemit toks [] []
 
 backformat :: [ByteCode] -> [String] -> [String]
 backformat [] acc = acc
