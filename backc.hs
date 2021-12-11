@@ -14,18 +14,19 @@ data Token = FNum Int
         | EndComment
         | StartThread
         | EndThread
+        | StartMacro
+        | EndMacro
         | No
         deriving(Show)
 
 instance Eq Token where -- note that its necessary we define this, so that the elem function works, and we can generate correct errors @ backparse_code
     (Word n) == (Word m) = n == m
-    StartThread == StartThread = True
-    EndThread == EndThread = True
     _ == _ = False -- note we return false, because we don't really care.
 
 data ByteCode = ByteCode Int | Header String | BackParsingError String deriving(Show)
 type WordBody = [ByteCode]
 type WordTable = Map.Map String WordBody
+type MacroTable = Map.Map Int WordBody
 
 hexChar :: Char -> Int
 hexChar '1' = 1
@@ -67,6 +68,8 @@ backlex ('(':input) wacc acc = backlex input [] ((++) acc $ recognize wacc Start
 backlex (')':input) wacc acc = backlex input [] ((++) acc $ recognize wacc EndComment)
 backlex ('[':input) wacc acc = backlex input [] ((++) acc $ recognize wacc StartThread)
 backlex (']':input) wacc acc = backlex input [] ((++) acc $ recognize wacc EndThread)
+backlex ('{':input) wacc acc = backlex input [] ((++) acc $ recognize wacc StartMacro)
+backlex ('}':input) wacc acc = backlex input [] ((++) acc $ recognize wacc EndMacro)
 backlex (c:input) wacc acc = backlex input (wacc++[c]) acc
 
 backlexm :: [String] -> [Token] -> [Token]
@@ -76,20 +79,20 @@ backlexm (x:xs) a = backlexm xs (a++(backlex x [] []))
 bklex :: String -> [Token]
 bklex sourcode = backlexm (words sourcode) []
 
-untilcmt :: [Token]-> [ByteCode] -> WordTable -> ([Token] -> [ByteCode] -> WordTable -> [ByteCode]) -> [ByteCode]
-untilcmt [] ac tbl f = [BackParsingError "Unclosed paranthesis."]
-untilcmt (EndComment:tokens) ac tbl f = f tokens ac tbl
-untilcmt (tok:tokens) ac tbl f = untilcmt tokens ac tbl f
+untilcmt :: [Token]-> [ByteCode] -> WordTable -> MacroTable -> ([Token] -> [ByteCode] -> WordTable -> MacroTable -> [ByteCode]) -> [ByteCode]
+untilcmt [] ac tbl mt f = [BackParsingError "Unclosed paranthesis."]
+untilcmt (EndComment:tokens) ac tbl mt f = f tokens ac tbl mt
+untilcmt (tok:tokens) ac tbl mt f = untilcmt tokens ac tbl mt f
 
-collect :: [Token] -> [Token] -> [ByteCode] -> WordTable -> ([Token] -> [ByteCode] -> WordTable -> [ByteCode]) -> [ByteCode]
-collect [] _ _ _ _ = [BackParsingError "Word Defintion doesn't end with ';'."]
-collect (WEnd:tokens) [] _ _ _ = [BackParsingError "Empty Word Defintion."]
-collect (tok:tokens) [] ac tbl f = collect tokens [tok] ac tbl f
-collect (WEnd:tokens) (Word nm:body) ac tbl f = let localt = tbl in case elem (Word nm) body of
-    False -> f tokens ac $ Map.insert nm (backparse_code body [] localt) tbl
+collect :: [Token] -> [Token] -> [ByteCode] -> WordTable -> MacroTable -> ([Token] -> [ByteCode] -> WordTable -> MacroTable -> [ByteCode]) -> [ByteCode]
+collect [] _ _ _ _ _ = [BackParsingError "Word Defintion doesn't end with ';'."]
+collect (WEnd:tokens) [] _ _ _ _ = [BackParsingError "Empty Word Defintion."]
+collect (tok:tokens) [] ac tbl m f = collect tokens [tok] ac tbl m f
+collect (WEnd:tokens) (Word nm:body) ac tbl m f = let localt = tbl in case elem (Word nm) body of
+    False -> f tokens ac (Map.insert nm (backparse_code body [] localt m) tbl) m
     True -> [BackParsingError "Encountred Recursive Word Definition."]
-collect (WEnd:tokens) (hd:body) _ _ _ = [BackParsingError "Word Definition doesn't start with a valid Word."]
-collect (tok:tokens) body ac tbl f = collect tokens (body++[tok]) ac tbl f
+collect (WEnd:tokens) (hd:body) _ _ _ _ = [BackParsingError "Word Definition doesn't start with a valid Word."]
+collect (tok:tokens) body ac tbl m f = collect tokens (body++[tok]) ac tbl m f
 
 encode :: String -> String -> ByteCode
 encode [] acc = ByteCode (read acc :: Int)
@@ -99,28 +102,40 @@ encode (x:xs) acc = encode xs (acc++(pad . show $ fromEnum x)) where
     pad (x:n:[]) = ['0', x, n]
     pad str = str
 
-backparse_code :: [Token] -> [ByteCode] -> WordTable -> [ByteCode]
-backparse_code [] acc _ = acc
-backparse_code (StartComment:tks) acc table = untilcmt tks acc table backparse_code
-backparse_code (EndComment:tks) _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
-backparse_code (Word ('$':name):tks) acc table = backparse_code tks (acc++[ByteCode 1, ByteCode (hexToDec name)]) table
-backparse_code (Word ('~':name):tks) acc table = backparse_code tks (acc++[ByteCode 27, encode name []]) table
-backparse_code (Word ('@':name):tks) acc table = backparse_code tks (acc++[ByteCode 28, encode name []]) table
-backparse_code (Word name:tks) acc table = let localt = table in case Map.lookup name table of
+backparse_code :: [Token] -> [ByteCode] -> WordTable -> MacroTable -> [ByteCode]
+backparse_code [] acc _ _ = acc
+backparse_code (StartComment:tks) acc table mtable = untilcmt tks acc table mtable backparse_code
+backparse_code (EndComment:tks) _ _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
+backparse_code (Word ('$':name):tks) acc table mtable = backparse_code tks (acc++[ByteCode 1, ByteCode (hexToDec name)]) table mtable
+backparse_code (Word ('~':name):tks) acc table mtable = backparse_code tks (acc++[ByteCode 27, encode name []]) table mtable
+backparse_code (Word ('@':name):tks) acc table mtable = backparse_code tks (acc++[ByteCode 28, encode name []]) table mtable
+backparse_code (Word ('\\':name):tks) acc table mtable = if all isDigit name then
+        case Map.lookup (read name :: Int) mtable of
+            Nothing -> [BackParsingError ("Tried To expand word not in scope. '" ++ name ++ "'")]
+            Just bd -> backparse_code tks (acc++bd) table mtable
+    else [BackParsingError ("Tried to expand invalid word. '"++name++"'")]
+backparse_code (Word name:tks) acc table mtable = case Map.lookup name table of
                                         Nothing ->  [BackParsingError ("Tried to use word not in scope. '" ++ name ++ "'")]
-                                        Just bd -> backparse_code tks (acc++bd) table 
-backparse_code (Define:tks) acc table = collect tks [] acc table backparse_code
-backparse_code (FNum n:tks) acc table = backparse_code tks (acc++[ByteCode 1, ByteCode n]) table
-backparse_code (tk:_) _ _
-    | tk == StartThread = [BackParsingError "Encountred illegal word while parsing. '['"]
-    | tk == EndThread = [BackParsingError "Encountred illegal word while parsing. ']'"]
+                                        Just bd -> backparse_code tks (acc++bd) table mtable
+backparse_code (Define:tks) acc table mtable = collect tks [] acc table mtable backparse_code
+backparse_code (FNum n:StartMacro:tks) acc table mtable = let localm = mtable in collectM tks [] localm where
+    collectM :: [Token] -> [Token] -> MacroTable -> [ByteCode]
+    collectM (EndMacro:ts) [] mt = [BackParsingError "Empty Word Defintion."]
+    collectM (EndMacro:ts) ac mt = let res = backparse_code ac [] table mt in
+        backparse_code ts (((++) acc (ByteCode 29:ByteCode n:res))++[ByteCode 30]) table $ Map.insert n res mt
+    collectM (t:ts) ac mt = collectM ts (ac++[t]) mt
+backparse_code (FNum n:tks) acc table mtable = backparse_code tks (acc++[ByteCode 1, ByteCode n]) table mtable
+backparse_code (StartThread:_) _ _ _ = [BackParsingError "Encountred illegal word while parsing. '['"]
+backparse_code (EndThread:_) _ _ _ = [BackParsingError "Encountred illegal word while parsing. ']'"]
+backparse_code (StartMacro:_) _ _ _ = [BackParsingError "Encountred illegal word while parsing. '{'"]
+backparse_code (EndMacro:_) _ _ _ = [BackParsingError "Encountred illegal word while parsing. '}'"]
 
-backparse_glob :: [Token] -> [ByteCode] -> WordTable -> [ByteCode]
-backparse_glob [] acc _ = acc
-backparse_glob (StartComment:tks) acc table = untilcmt tks acc table backparse_glob
-backparse_glob (EndComment:tks) _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
-backparse_glob (Define:tks) acc table = collect tks [] acc table backparse_glob
-backparse_glob (Word name:StartThread:tks) acc table = let localt = table in check $ collectT tks [] localt name where
+backparse_glob :: [Token] -> [ByteCode] -> WordTable -> MacroTable -> [ByteCode]
+backparse_glob [] acc _ _ = acc
+backparse_glob (StartComment:tks) acc table mtable = untilcmt tks acc table mtable backparse_glob
+backparse_glob (EndComment:tks) _ _ _ = [BackParsingError "Encountred Closing paranthesis without a preceeding open one."]
+backparse_glob (Define:tks) acc table mtable = collect tks [] acc table mtable backparse_glob
+backparse_glob (Word name:StartThread:tks) acc table mtable = let localt = table in check $ collectT tks [] localt name where
     check :: [ByteCode] -> [ByteCode]
     check [Header n, BackParsingError er] = [BackParsingError er]
     check ac = ac
@@ -128,11 +143,11 @@ backparse_glob (Word name:StartThread:tks) acc table = let localt = table in che
     collectT [] _ _ _ = [BackParsingError "Unclosed Square Bracket."]
     collectT (EndThread:tokens) [] _ _  = acc
     collectT (tok:tokens) [] tbl n = collectT tokens [tok] tbl n
-    collectT (EndThread:tokens) a tbl n = backparse_glob tokens ((++) acc $ (Header n):(backparse_code a [] tbl)) table
+    collectT (EndThread:tokens) a tbl n = backparse_glob tokens ((++) acc $ (Header n):(backparse_code a [] tbl mtable)) table mtable
     collectT (tok:tokens) a tbl n = collectT tokens (a++[tok]) tbl n
-backparse_glob (Word name:_) _ _ = [BackParsingError "Encountred Thread Definition, but couldn't find '['."]
-backparse_glob (EndThread:tks) _ _ = [BackParsingError "Encountred Closing Square Bracket without a preceeding open one."]
-backparse_glob _ _ _  = [BackParsingError "Encountred Something which is neither a thread or name defintion."]
+backparse_glob (Word name:_) _ _ _ = [BackParsingError "Encountred Thread Definition, but couldn't find '['."]
+backparse_glob (EndThread:tks) _ _ _ = [BackParsingError "Encountred Closing Square Bracket without a preceeding open one."]
+backparse_glob _ _ _ _ = [BackParsingError "Encountred Something which is neither a thread or name defintion."]
 
 backmap :: WordTable
 backmap = Map.fromList [(".",[ByteCode 2])
@@ -162,8 +177,11 @@ backmap = Map.fromList [(".",[ByteCode 2])
     ,("loop",[ByteCode 26])
     ]
 
+backmac :: MacroTable
+backmac = Map.empty
+
 bkparse :: [Token] -> Either String [ByteCode]
-bkparse toks = case backparse_glob toks [] backmap of
+bkparse toks = case backparse_glob toks [] backmap backmac of
     [BackParsingError er] -> Left er
     res -> Right res
 
